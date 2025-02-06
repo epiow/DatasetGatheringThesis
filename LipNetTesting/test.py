@@ -19,7 +19,7 @@ def preprocess_video(video_path, output_path, target_width=None, target_height=N
 
     cap = cv2.VideoCapture(video_path)
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # Output format
-    out = cv2.VideoWriter(output_path, fourcc, 20.0, (target_width, target_height))  # Adjust FPS as needed
+    out = cv2.VideoWriter(output_path, fourcc, 25.0, (target_width, target_height))  # Adjust FPS as needed
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -67,6 +67,6 @@ def preprocess_video(video_path, output_path, target_width=None, target_height=N
     out.release()
 
 # Example usage
-video_path = './mp4/test1.mp4'
-output_path = 'preprocessed_lip_video12.mp4'
+video_path = './mp4/recording_1.mp4'
+output_path = 'preprocessed_lip_video.mp4'
 preprocess_video(video_path, output_path, target_width=224, target_height=224, augment=False)

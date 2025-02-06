@@ -14,6 +14,29 @@ import queue
 import wave
 import os
 
+"""
+ca1 = Maayong buntag
+cb1 = Maayong hapon
+cc1 = Maayong Gabii
+cd1 = Amping
+ce1 = Maayo Man Ko
+cf1 = Palihug
+cg1 = Mag-amping ka
+ch1 = Walay Sapayan
+ci1 = Unsa imong buhaton?
+cj1 = Daghang Salamat
+
+ia1 = Naimbag a bigat
+ib1 = Naimbag a malem
+ic1 = Naimbag a rabii
+id1 = Diyos iti agyaman
+ie1 = Mayat Met, agyamanak
+if1 = Paki
+ig1 = Ag im-imbag ka
+ih1 = Awan ti ania
+ii1 = Anat ub-ubraem
+ij1 = Agyamanak un-unay
+"""
 class VideoAnnotator:
     def __init__(self, root):
         self.root = root
@@ -181,12 +204,12 @@ class VideoAnnotator:
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
             
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            out = cv2.VideoWriter(self.video_filename, fourcc, self.frame_rate,
+            out = cv2.VideoWriter(self.video_filename, fourcc, 25,
                                 self.resolution)
             
             start_time = time.time()
             while self.recording and self.frame_count < self.max_frames:
-                ret, frame = cap.read()
+                ret, frame = cap.read() 
                 if ret:
                     out.write(frame)
                     cv2image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA)
@@ -196,7 +219,7 @@ class VideoAnnotator:
                     self.preview_label.configure(image=imgtk)
                     self.frame_count += 1
                     
-                    # Ensure we maintain proper frame rate
+                    # Ensure we maintain proppuyther frame rate
                     elapsed = time.time() - start_time
                     target_elapsed = self.frame_count / self.frame_rate
                     if elapsed < target_elapsed:
