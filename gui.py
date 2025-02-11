@@ -6,6 +6,8 @@ from PIL import Image, ImageTk
 import threading
 import time
 import dlib
+from tensorflow.keras.models import load_model
+import tensorflow as tf
 
 class LipReadingApp:
     def __init__(self, root):
@@ -23,6 +25,7 @@ class LipReadingApp:
         self.cap = None
         self.detector = dlib.get_frontal_face_detector()
         self.predictor = dlib.shape_predictor("./LipNetTesting/shape_predictor_68_face_landmarks.dat")
+        self.model = load_model("weights.h5")  # Add this line
         self.inference_running = False
         self.current_prediction = ""
         self.updating_camera = True
@@ -182,13 +185,47 @@ class LipReadingApp:
         threading.Thread(target=self.process_frames).start()
 
     def process_frames(self):
-        # Replace this simulation with your actual model inference.
-        # The frame_buffer list holds the 75 collected frames.
-        time.sleep(2)  # Simulate a processing delay.
-        self.current_prediction = "Maayong buntag (Cebuano)"  # Replace with real output.
+        try:
+            # Preprocess frames
+            processed_frames = []
+            for frame in self.frame_buffer:
+                # Convert BGR to RGB
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                
+                # Normalize pixel values (example - adjust according to your model)
+                normalized_frame = rgb_frame.astype(np.float32) / 255.0
+                
+                # If your model expects grayscale:
+                # gray_frame = cv2.cvtColor(rgb_frame, cv2.COLOR_RGB2GRAY)
+                # processed_frames.append(gray_frame)
+                
+                processed_frames.append(normalized_frame)
+
+            # Convert to numpy array and add batch dimension
+            input_data = np.array(processed_frames)
+            input_data = np.expand_dims(input_data, axis=0)  # Shape: (1, 75, 224, 224, 3)
+
+            # Run inference
+            predictions = self.model.predict(input_data)
+            
+            # Decode predictions (example - adjust for your model)
+            # If using CTC decoding:
+            # decoded = tf.keras.backend.ctc_decode(...)
+            # Or simple argmax:
+            self.current_prediction = self.decode_prediction(predictions)
+            
+        except Exception as e:
+            self.current_prediction = f"Error: {str(e)}"
         
-        # Update the UI after processing is complete.
         self.root.after(0, self.finish_processing)
+
+    def decode_prediction(self, predictions):
+        # Implement your decoding logic here
+        # Example: convert character probabilities to text
+        # char_set = "abcdefghijklmnopqrstuvwxyz' "
+        # indices = np.argmax(predictions[0], axis=1)
+        # return ''.join([char_set[i] for i in indices])
+        return "Sample Prediction"  # Replace with actual decoding
 
     def finish_processing(self):
         # Hide the loading overlay and resume the camera feed.

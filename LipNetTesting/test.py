@@ -67,6 +67,7 @@ def preprocess_video(video_path, output_path, target_width=None, target_height=N
     out.release()
 
 # Example usage
-video_path = './mp4/ca1.mp4'
-output_path = 'preprocessed_lip_video2.mp4'
+x = input('Enter file name: ')
+video_path = x
+output_path = 'test.mp4'
 preprocess_video(video_path, output_path, target_width=224, target_height=224, augment=False)

@@ -14,6 +14,29 @@ import queue
 import wave
 import os
 
+"""
+ca1 = Maayong buntag
+cb1 = Maayong hapon
+cc1 = Maayong Gabii
+cd1 = Amping
+ce1 = Maayo Man Ko
+cf1 = Palihug
+cg1 = Mag-amping ka
+ch1 = Walay Sapayan
+ci1 = Unsa imong buhaton?
+cj1 = Daghang Salamat
+
+ia1 = Naimbag a bigat
+ib1 = Naimbag a malem
+ic1 = Naimbag a rabii
+id1 = Diyos iti agyaman
+ie1 = Mayat Met, agyamanak
+if1 = Paki
+ig1 = Ag im-imbag ka
+ih1 = Awan ti ania
+ii1 = Anat ub-ubraem
+ij1 = Agyamanak un-unay
+"""
 class VideoAnnotator:
     def __init__(self, root):
         self.root = root
@@ -176,7 +199,7 @@ class VideoAnnotator:
         
     def record_video(self):
         try:
-            cap = cv2.VideoCapture(0)
+            cap = cv2.VideoCapture(2)
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
             
