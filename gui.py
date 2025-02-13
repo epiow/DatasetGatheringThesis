@@ -204,16 +204,16 @@ class LipReadingSystem:
         std = tf.math.reduce_std(tf.cast(static_crop, tf.float32))
         return tf.cast((static_crop - mean), tf.float32) / std.numpy()
 
-    def process_video(self, source):
-        """Process video and return prediction with improved frame handling"""
-        frames = self.collect_frames(source)
-        if frames is None:
-            return "Error: Failed to collect frames"
+
+    def process_frames(self, frame):
+        """Process a list of frames and return prediction"""
+        if len(frame) < self.sequence_length:
+            return f"Error: Not enough frames. Need {self.sequence_length}, got {len(frame)}"
             
-        processed_frames = []
         frame_tensors = []
         
-        for frame in frames[:self.sequence_length]:
+        # Process only the required number of frames
+        for frame in frame[:self.sequence_length]:
             processed = self.preprocess_frame(frame)
             if processed is not None:
                 frame_tensors.append(processed)
@@ -236,7 +236,7 @@ class LipReadingSystem:
                 if num >= 0:
                     char = num_to_char(num).numpy().decode('utf-8')
                     prediction_chars.append(char)
-            print("Actual Output: " +(''.join(prediction_chars)))
+            print("Actual Output: " + (''.join(prediction_chars)))
             
             return CTC.correct_to_lexicon((''.join(prediction_chars)), lexicon)
             

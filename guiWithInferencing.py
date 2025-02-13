@@ -14,12 +14,37 @@ from keras.layers import Flatten, Bidirectional, LSTM, Dropout, Dense
 from keras.layers import Layer, Dense, Multiply, Concatenate, GlobalAveragePooling3D, Reshape
 from keras.initializers import Orthogonal, HeNormal
 import json
+from ctc import CTC
 
 vocab = [x for x in "abcdefghijklmnopqrstuvwxyz'?!123456789 "]
 char_to_num = tf.keras.layers.StringLookup(vocabulary=vocab, oov_token="")
 num_to_char = tf.keras.layers.StringLookup(
     vocabulary=char_to_num.get_vocabulary(), oov_token="", invert=True
 )
+
+lexicon = [
+        "Maayong buntag",
+        "Maayong hapon",
+        "Maayong Gabii",
+        "Amping",
+        "Maayo Man Ko",
+        "Palihug",
+        "Mag-amping ka",
+        "Walay Sapayan",
+        "Unsa imong buhaton?",
+        "Daghang Salamat",
+        "Naimbag a bigat",
+        "Naimbag a malem",
+        "Naimbag a rabii",
+        "Diyos iti agyaman",
+        "Mayat Met, agyamanak",
+        "Paki",
+        "Ag im-imbag ka",
+        "Awan ti ania",
+        "Anat ub-ubraem",
+        "Agyamanak un-unay"
+    ]
+
 
 class SelectiveFeatureFusionModule(Layer):
     def __init__(self):
@@ -87,7 +112,7 @@ class LipReadingApp:
             # Create model with architecture
             self.model = create_model()
             # Load weights
-            self.model.load_weights('./newcheckpoint.weights.h5')
+            self.model.load_weights('./checkpointlatest.weights.h5')
             print("Model loaded successfully")
         except Exception as e:
             print(f"Error loading model: {e}")
@@ -228,78 +253,90 @@ class LipReadingApp:
         return frame
 
     def preprocess_frame(self, frame):
-        """Preprocess a single frame for the model"""
-        if self.predictor is None:
-            return None
-            
+        """Preprocess a single frame for the model with improved ROI extraction and normalization"""
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         faces = self.detector(gray)
         
         if len(faces) > 0:
             face = faces[0]
             landmarks = self.predictor(gray, face)
-            lip_points = np.array([(landmarks.part(n).x, landmarks.part(n).y) 
-                                 for n in range(48, 68)])
+            mouth_points = [(landmarks.part(n).x, landmarks.part(n).y) 
+                        for n in range(48, 68)]
             
-            x, y, w, h = cv2.boundingRect(lip_points)
-            lip_frame = frame[y:y + h, x:x + w]
-            lip_frame = cv2.resize(lip_frame, (self.target_width, self.target_height))
+            # Calculate bounding box with padding
+            x_coords = [p[0] for p in mouth_points]
+            y_coords = [p[1] for p in mouth_points]
+            padding = 5
             
-            # Convert to grayscale
-            lip_frame = cv2.cvtColor(lip_frame, cv2.COLOR_BGR2GRAY)
+            x_min = max(0, min(x_coords) - padding)
+            y_min = max(0, min(y_coords) - padding)
+            x_max = min(gray.shape[1], max(x_coords) + padding)
+            y_max = min(gray.shape[0], max(y_coords) + padding)
             
-            # Normalize
-            lip_frame = (lip_frame - 127.5) / 127.5
+            # Extract and resize mouth ROI
+            mouth_roi = gray[y_min:y_max, x_min:x_max]
+            lip_frame = cv2.resize(mouth_roi, (self.target_width, self.target_height))
             
-            # Add channel dimension
-            lip_frame = np.expand_dims(lip_frame, axis=-1)
+            # Convert to tensor for consistent processing
+            lip_frame = tf.convert_to_tensor(lip_frame)
+            lip_frame = tf.expand_dims(lip_frame, axis=-1)
             
-            return lip_frame
-        return None
+            # Apply same normalization as training
+            mean = tf.reduce_mean(lip_frame)
+            std = tf.math.reduce_std(tf.cast(lip_frame, tf.float32))
+            lip_frame = tf.cast((lip_frame - mean), tf.float32) / std
+            
+            return lip_frame.numpy()
+        
+        # Fallback to static crop if no face detected
+        static_crop = gray[190:236, 80:220]
+        static_crop = cv2.resize(static_crop, (self.target_width, self.target_height))
+        static_crop = tf.convert_to_tensor(static_crop)
+        static_crop = tf.expand_dims(static_crop, axis=-1)
+        
+        mean = tf.reduce_mean(static_crop)
+        std = tf.math.reduce_std(tf.cast(static_crop, tf.float32))
+        return tf.cast((static_crop - mean), tf.float32) / std.numpy()
+
 
     def process_frames(self):
         if len(self.frame_buffer) < self.sequence_length:
             print(f"Not enough frames: {len(self.frame_buffer)}")
             return
-        
-        # Preprocess frames
+            
+        frame_tensors = []
         processed_frames = []
+        
+        # Process only the required number of frames
         for frame in self.frame_buffer[:self.sequence_length]:
             processed = self.preprocess_frame(frame)
             if processed is not None:
-                processed_frames.append(processed)
+                frame_tensors.append(processed)
         
-        if len(processed_frames) < self.sequence_length:
-            print("Some frames could not be processed")
-            return
+        if len(frame_tensors) < self.sequence_length:
+            return "Error: Failed to process some frames"
         
         try:
-            # Prepare input for model
-            X = np.array(processed_frames)
-            X = np.expand_dims(X, axis=0)  # Add batch dimension
+            # Stack frames into a single tensor
+            X = np.stack(frame_tensors)
+            X = np.expand_dims(X, axis=0)
             
-            # Model inference
             yhat = self.model.predict(X)
-            
-            # Decode predictions
             decoded = tf.keras.backend.ctc_decode(yhat, 
-                                                input_length=[self.sequence_length], 
+                                                input_length=[75], 
                                                 greedy=True)[0][0].numpy()
             
-            # Convert decoded output to text using the StringLookup layer
             prediction_chars = []
             for num in decoded[0]:
-                if num >= 0:  # Skip padding tokens (-1)
+                if num >= 0:
                     char = num_to_char(num).numpy().decode('utf-8')
                     prediction_chars.append(char)
-            
-            self.current_prediction = ''.join(prediction_chars)
+            print("Actual Output: " + (''.join(prediction_chars)))
+            print("Predicted Output: " + (CTC.correct_to_lexicon((''.join(prediction_chars)), lexicon)))
+            self.current_prediction = CTC.correct_to_lexicon((''.join(prediction_chars)), lexicon)
             
         except Exception as e:
-            print(f"Error during inference: {e}")
-            self.current_prediction = f"Error: {str(e)}"
-        
-        self.root.after(0, self.finish_processing)
+            return f"Error during inference: {str(e)}"
 
 
     def toggle_inference(self):
