@@ -1,253 +1,278 @@
-import tkinter as tk
-from tkinter import ttk
 import cv2
 import numpy as np
-from PIL import Image, ImageTk
-import threading
-import time
 import dlib
-from tensorflow.keras.models import load_model
 import tensorflow as tf
+from keras.models import Sequential
+from keras.layers import Conv3D, MaxPool3D, Activation, TimeDistributed
+from keras.layers import Flatten, Bidirectional, LSTM, Dropout, Dense
+from keras.layers import Layer, Dense, Multiply, Concatenate, GlobalAveragePooling3D, Reshape
+from ctc import CTC
+import time
+import sys
 
-class LipReadingApp:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Jetson Lip Reading System")
-        # Set the main window size to 1024x600 to fit the display
-        self.root.geometry("1024x600")
-        
-        # Define canvas dimensions that maintain a 4:3 aspect ratio.
-        # (For example, 667x500 fits well within 1024x600, leaving room for controls.)
-        self.canvas_width = 480
-        self.canvas_height = 360
-        
-        # Camera and model variables
-        self.cap = None
-        self.detector = dlib.get_frontal_face_detector()
-        self.predictor = dlib.shape_predictor("./LipNetTesting/shape_predictor_68_face_landmarks.dat")
-        self.model = load_model("weights.h5")  # Add this line
-        self.inference_running = False
-        self.current_prediction = ""
-        self.updating_camera = True
-        self.frame_buffer = []  # To store collected frames
-        
-        # Setup the GUI elements
-        self.setup_gui()
-        
-        # Start the camera feed
-        self.start_camera()
+# Keep the vocabulary and character conversion setup
+vocab = [x for x in "abcdefghijklmnopqrstuvwxyz'?!123456789 "]
+char_to_num = tf.keras.layers.StringLookup(vocabulary=vocab, oov_token="")
+num_to_char = tf.keras.layers.StringLookup(
+    vocabulary=char_to_num.get_vocabulary(), oov_token="", invert=True
+)
+lexicon = [
+        "Maayong buntag",
+        "Maayong hapon",
+        "Maayong Gabii",
+        "Amping",
+        "Maayo Man Ko",
+        "Palihug",
+        "Mag-amping ka",
+        "Walay Sapayan",
+        "Unsa imong buhaton?",
+        "Daghang Salamat",
+        "Naimbag a bigat",
+        "Naimbag a malem",
+        "Naimbag a rabii",
+        "Diyos iti agyaman",
+        "Mayat Met, agyamanak",
+        "Paki",
+        "Ag im-imbag ka",
+        "Awan ti ania",
+        "Anat ub-ubraem",
+        "Agyamanak un-unay"
+    ]
 
-    def setup_gui(self):
-        # Create a labeled frame for the video display
-        self.video_frame = ttk.LabelFrame(self.root, text="Camera Feed")
-        self.video_frame.pack(padx=10, pady=10, fill=tk.X)
-        
-        # Create a canvas for the camera feed using our defined dimensions.
-        # Using pack(anchor="center") centers the canvas horizontally.
-        self.canvas = tk.Canvas(self.video_frame, width=self.canvas_width, height=self.canvas_height)
-        self.canvas.pack(anchor="center", pady=10)
-        
-        # Loading overlay shown during processing
-        self.loading_label = ttk.Label(
-            self.video_frame,
-            text="Processing...",
-            font=("Helvetica", 24),
-            background="white",
-            relief="solid"
-        )
-        self.loading_label.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
-        self.loading_label.place_forget()
-        
-        # Control buttons frame
-        self.control_frame = ttk.Frame(self.root)
-        self.control_frame.pack(pady=5)
-        
-        self.start_button = ttk.Button(
-            self.control_frame, 
-            text="Start Inference", 
-            command=self.toggle_inference
-        )
-        self.start_button.pack(side=tk.LEFT, padx=5)
-        
-        # Prediction label to show the model output
-        self.pred_label = ttk.Label(
-            self.root, 
-            text="Prediction: ", 
-            font=("Helvetica", 14)
-        )
-        self.pred_label.pack(pady=5)
+class SelectiveFeatureFusionModule(Layer):
+    def __init__(self):
+        super(SelectiveFeatureFusionModule, self).__init__()
 
-    def start_camera(self):
-        self.cap = cv2.VideoCapture(0)
-        # Optionally, set the camera resolution if supported:
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        self.show_camera_feed()
+    def build(self, input_shape):
+        self.w1 = self.add_weight(shape=(input_shape[-1],), initializer='he_normal', trainable=True)
+        self.w2 = self.add_weight(shape=(input_shape[-1],), initializer='he_normal', trainable=True)
+        self.projection = Dense(input_shape[-1], kernel_initializer='he_normal')
 
-    def show_camera_feed(self):
-        if not self.updating_camera:
-            return
+    def call(self, inputs):
+        weighted_input1 = inputs * self.w1
+        weighted_input2 = inputs * self.w2
+        fused_features = Concatenate()([weighted_input1, weighted_input2])
+        fused_features = self.projection(fused_features)
+        return fused_features
+
+def create_model():
+    model = Sequential()
+    model.add(Conv3D(128, 3, input_shape=(75, 46, 140, 1), padding='same'))
+    model.add(Activation('relu'))
+    model.add(MaxPool3D((1, 2, 2)))
+
+    model.add(Conv3D(256, 3, padding='same'))
+    model.add(Activation('relu'))
+    model.add(MaxPool3D((1, 2, 2)))
+
+    model.add(Conv3D(75, 3, padding='same'))
+    model.add(Activation('relu'))
+    model.add(MaxPool3D((1, 2, 2)))
+
+    model.add(SelectiveFeatureFusionModule())
+    model.add(Reshape((75, 5 * 17 * 75)))
+
+    model.add(Bidirectional(LSTM(128, kernel_initializer='Orthogonal', return_sequences=True)))
+    model.add(Dropout(.5))
+    model.add(Bidirectional(LSTM(128, kernel_initializer='Orthogonal', return_sequences=True)))
+    model.add(Dropout(.5))
+
+    model.add(Dense(char_to_num.vocabulary_size() + 1, kernel_initializer='he_normal', activation='softmax'))
+    
+    return model
+
+class LipReadingSystem:
+    def __init__(self):
+        self.target_height = 46
+        self.target_width = 140
+        self.sequence_length = 75
+        self.frame_rate = 25
+        self.recording_resolution = (640, 480)
+        
+        print("Initializing lip reading system...")
+        
+        # Set memory growth for GPU
+        gpus = tf.config.experimental.list_physical_devices('GPU')
+        if gpus:
+            try:
+                for gpu in gpus:
+                    tf.config.experimental.set_memory_growth(gpu, True)
+                print("GPU memory growth enabled")
+            except RuntimeError as e:
+                print(f"Error setting GPU memory growth: {e}")
+        
+        # Load model with reduced memory footprint
+        try:
+            tf.keras.backend.clear_session()
+            self.model = create_model()
+            self.model.load_weights('checkpointlatest.weights.h5')
+            print("Model loaded successfully")
+        except Exception as e:
+            print(f"Error loading model: {e}")
+            sys.exit(1)
+        
+        # Initialize face detection
+        try:
+            self.detector = dlib.get_frontal_face_detector()
+            self.predictor = dlib.shape_predictor("./LipNetTesting/shape_predictor_68_face_landmarks.dat")
+            print("Face predictor loaded successfully")
+        except Exception as e:
+            print(f"Error loading face predictor: {e}")
+            sys.exit(1)
+
+    def collect_frames(self, source):
+        """Collect frames from video source"""
+        print("Collecting frames...")
+        frame_buffer = []
+        
+        cap = cv2.VideoCapture(source)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.recording_resolution[0])
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.recording_resolution[1])
+        
+        if not cap.isOpened():
+            print("Error: Could not open video source")
+            return None
             
-        ret, frame = self.cap.read()
-        if ret:
-            # Process the frame (e.g. to detect and mark the mouth region)
-            frame = self.detect_mouth(frame)
-            # Resize the frame to our canvas size before displaying it.
-            frame = cv2.resize(frame, (self.canvas_width, self.canvas_height))
-            # Convert BGR (OpenCV format) to RGB
-            img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            img = Image.fromarray(img)
-            imgtk = ImageTk.PhotoImage(image=img)
-            
-            # Update the canvas with the new frame
-            self.canvas.imgtk = imgtk
-            self.canvas.create_image(0, 0, anchor=tk.NW, image=imgtk)
+        start_time = time.time()
         
-        self.root.after(10, self.show_camera_feed)
-
-    def detect_mouth(self, frame):
+        while len(frame_buffer) < self.sequence_length:
+            ret, frame = cap.read()
+            if not ret:
+                break
+                
+            frame_buffer.append(frame)
+            
+            # Maintain precise frame rate
+            current_count = len(frame_buffer)
+            target_elapsed = current_count / self.frame_rate
+            actual_elapsed = time.time() - start_time
+            sleep_time = target_elapsed - actual_elapsed
+            
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+        
+        cap.release()
+        
+        if len(frame_buffer) < self.sequence_length:
+            print(f"Warning: Only collected {len(frame_buffer)} frames")
+            return None
+            
+        return frame_buffer
+    def preprocess_frame(self, frame):
+        """Preprocess a single frame for the model with improved ROI extraction and normalization"""
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         faces = self.detector(gray)
         
-        for face in faces:
+        if len(faces) > 0:
+            face = faces[0]
             landmarks = self.predictor(gray, face)
-            mouth_points = landmarks.parts()[48:68]
+            mouth_points = [(landmarks.part(n).x, landmarks.part(n).y) 
+                        for n in range(48, 68)]
             
-            x = min([p.x for p in mouth_points])
-            y = min([p.y for p in mouth_points])
-            w = max([p.x for p in mouth_points]) - x
-            h = max([p.y for p in mouth_points]) - y
+            # Calculate bounding box with padding
+            x_coords = [p[0] for p in mouth_points]
+            y_coords = [p[1] for p in mouth_points]
+            padding = 5
             
-            margin_x = int(w * 0.5)
-            margin_y = int(h * 0.5)
+            x_min = max(0, min(x_coords) - padding)
+            y_min = max(0, min(y_coords) - padding)
+            x_max = min(gray.shape[1], max(x_coords) + padding)
+            y_max = min(gray.shape[0], max(y_coords) + padding)
             
-            x = max(0, x - margin_x)
-            y = max(0, y - margin_y)
-            w = min(frame.shape[1] - x, w + 2 * margin_x)
-            h = min(frame.shape[0] - y, h + 2 * margin_y)
+            # Extract and resize mouth ROI
+            mouth_roi = gray[y_min:y_max, x_min:x_max]
+            lip_frame = cv2.resize(mouth_roi, (self.target_width, self.target_height))
             
-            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            # Convert to tensor for consistent processing
+            lip_frame = tf.convert_to_tensor(lip_frame)
+            lip_frame = tf.expand_dims(lip_frame, axis=-1)
+            
+            # Apply same normalization as training
+            mean = tf.reduce_mean(lip_frame)
+            std = tf.math.reduce_std(tf.cast(lip_frame, tf.float32))
+            lip_frame = tf.cast((lip_frame - mean), tf.float32) / std
+            
+            return lip_frame.numpy()
         
-        return frame
+        # Fallback to static crop if no face detected
+        static_crop = gray[190:236, 80:220]
+        static_crop = cv2.resize(static_crop, (self.target_width, self.target_height))
+        static_crop = tf.convert_to_tensor(static_crop)
+        static_crop = tf.expand_dims(static_crop, axis=-1)
+        
+        mean = tf.reduce_mean(static_crop)
+        std = tf.math.reduce_std(tf.cast(static_crop, tf.float32))
+        return tf.cast((static_crop - mean), tf.float32) / std.numpy()
 
-    def toggle_inference(self):
-        if not self.inference_running:
-            self.inference_running = True
-            self.start_button.config(text="Collecting Frames...", state=tk.DISABLED)
-            self.frame_buffer = []  # Clear any previous frames
-            threading.Thread(target=self.collect_frames).start()
-
-    def collect_frames(self):
-        # Collect approximately 75 frames (roughly 3 seconds at ~25 fps)
-        for _ in range(75):
-            if not self.inference_running:
-                break
-            ret, frame = self.cap.read()
-            if ret:
-                # Process the frame to detect the mouth region and store it
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                faces = self.detector(gray)
-                if len(faces) > 0:
-                    face = faces[0]
-                    landmarks = self.predictor(gray, face)
-                    mouth_points = landmarks.parts()[48:68]
-                    
-                    x = min([p.x for p in mouth_points])
-                    y = min([p.y for p in mouth_points])
-                    w = max([p.x for p in mouth_points]) - x
-                    h = max([p.y for p in mouth_points]) - y
-                    
-                    margin_x = int(w * 0.5)
-                    margin_y = int(h * 0.5)
-                    x = max(0, x - margin_x)
-                    y = max(0, y - margin_y)
-                    w = min(frame.shape[1] - x, w + 2 * margin_x)
-                    h = min(frame.shape[0] - y, h + 2 * margin_y)
-                    
-                    mouth_roi = frame[y:y+h, x:x+w]
-                    mouth_roi = cv2.resize(mouth_roi, (224, 224))
-                    self.frame_buffer.append(mouth_roi)
+    def process_video(self, source):
+        """Process video and return prediction with improved frame handling"""
+        frames = self.collect_frames(source)
+        if frames is None:
+            return "Error: Failed to collect frames"
             
-            # Maintain an approximate capture rate of 25 fps
-            time.sleep(0.04)
+        processed_frames = []
+        frame_tensors = []
         
-        # After collecting frames, start the processing routine.
-        if self.frame_buffer:
-            self.root.after(0, self.start_processing)
-
-    def start_processing(self):
-        # Pause the camera feed and display the loading overlay.
-        self.updating_camera = False
-        self.loading_label.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
-        self.start_button.config(text="Processing...")
+        for frame in frames[:self.sequence_length]:
+            processed = self.preprocess_frame(frame)
+            if processed is not None:
+                frame_tensors.append(processed)
         
-        # Simulate processing (replace with actual inference code)
-        threading.Thread(target=self.process_frames).start()
-
-    def process_frames(self):
+        if len(frame_tensors) < self.sequence_length:
+            return "Error: Failed to process some frames"
+        
         try:
-            # Preprocess frames
-            processed_frames = []
-            for frame in self.frame_buffer:
-                # Convert BGR to RGB
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                
-                # Normalize pixel values (example - adjust according to your model)
-                normalized_frame = rgb_frame.astype(np.float32) / 255.0
-                
-                # If your model expects grayscale:
-                # gray_frame = cv2.cvtColor(rgb_frame, cv2.COLOR_RGB2GRAY)
-                # processed_frames.append(gray_frame)
-                
-                processed_frames.append(normalized_frame)
-
-            # Convert to numpy array and add batch dimension
-            input_data = np.array(processed_frames)
-            input_data = np.expand_dims(input_data, axis=0)  # Shape: (1, 75, 224, 224, 3)
-
-            # Run inference
-            predictions = self.model.predict(input_data)
+            # Stack frames into a single tensor
+            X = np.stack(frame_tensors)
+            X = np.expand_dims(X, axis=0)
             
-            # Decode predictions (example - adjust for your model)
-            # If using CTC decoding:
-            # decoded = tf.keras.backend.ctc_decode(...)
-            # Or simple argmax:
-            self.current_prediction = self.decode_prediction(predictions)
+            yhat = self.model.predict(X)
+            decoded = tf.keras.backend.ctc_decode(yhat, 
+                                                input_length=[75], 
+                                                greedy=True)[0][0].numpy()
+            
+            prediction_chars = []
+            for num in decoded[0]:
+                if num >= 0:
+                    char = num_to_char(num).numpy().decode('utf-8')
+                    prediction_chars.append(char)
+            print("Actual Output: " +(''.join(prediction_chars)))
+            
+            return CTC.correct_to_lexicon((''.join(prediction_chars)), lexicon)
             
         except Exception as e:
-            self.current_prediction = f"Error: {str(e)}"
-        
-        self.root.after(0, self.finish_processing)
+            return f"Error during inference: {str(e)}"
 
-    def decode_prediction(self, predictions):
-        # Implement your decoding logic here
-        # Example: convert character probabilities to text
-        # char_set = "abcdefghijklmnopqrstuvwxyz' "
-        # indices = np.argmax(predictions[0], axis=1)
-        # return ''.join([char_set[i] for i in indices])
-        return "Sample Prediction"  # Replace with actual decoding
-
-    def finish_processing(self):
-        # Hide the loading overlay and resume the camera feed.
-        self.loading_label.place_forget()
-        self.updating_camera = True
-        self.show_camera_feed()
+def main():
+    # Initialize the system
+    print("Lip Reading System - Console Version")
+    system = LipReadingSystem()
+    
+    while True:
+        print("\nOptions:")
+        print("1. Process from webcam")
+        print("2. Process from video file")
+        print("3. Exit")
         
-        # Update the prediction display.
-        self.pred_label.config(text=f"Prediction: {self.current_prediction}")
+        choice = input("Enter your choice (1-3): ")
         
-        # Reset the inference state and re-enable the button.
-        self.inference_running = False
-        self.start_button.config(text="Start Inference", state=tk.NORMAL)
-
-    def on_closing(self):
-        self.inference_running = False
-        if self.cap:
-            self.cap.release()
-        self.root.destroy()
+        if choice == "1":
+            print("Recording from webcam for 3 seconds...")
+            prediction = system.process_video(0)  # 0 for default webcam
+            print(f"Prediction: {prediction}")
+            
+        elif choice == "2":
+            video_path = input("Enter the path to the video file: ")
+            print(f"Processing video: {video_path}")
+            prediction = system.process_video(video_path)
+            print(f"Prediction: {prediction}")
+            
+        elif choice == "3":
+            print("Exiting...")
+            break
+            
+        else:
+            print("Invalid choice. Please try again.")
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = LipReadingApp(root)
-    root.protocol("WM_DELETE_WINDOW", app.on_closing)
-    root.mainloop()
+    main()

@@ -87,7 +87,7 @@ class LipReadingApp:
             # Create model with architecture
             self.model = create_model()
             # Load weights
-            self.model.load_weights('./checkpoint.weights.h5')
+            self.model.load_weights('./newcheckpoint.weights.h5')
             print("Model loaded successfully")
         except Exception as e:
             print(f"Error loading model: {e}")

@@ -1,7 +1,6 @@
 import tf2onnx
 import tensorflow as tf
 import keras
-
 # Load your Keras model
 model = keras.models.load_model("weights.h5")
 

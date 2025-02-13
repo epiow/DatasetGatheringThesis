@@ -1,3 +1,6 @@
 *.dat   
 *.mp4
 *.wav
+*.weights.h5
+*.align
+*.ipynb
